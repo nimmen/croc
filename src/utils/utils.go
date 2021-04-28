@@ -6,15 +6,18 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cespare/xxhash"
 	"github.com/kalafut/imohash"
@@ -39,9 +42,32 @@ func GetInput(prompt string) string {
 	return strings.TrimSpace(text)
 }
 
-// HashFile returns the hash of a file
-func HashFile(fname string) (hash256 []byte, err error) {
-	return IMOHashFile(fname)
+// HashFile returns the hash of a file or, in case of a symlink, the
+// SHA256 hash of its target. Takes an argument to specify the algorithm to use.
+func HashFile(fname string, algorithm string) (hash256 []byte, err error) {
+	var fstats os.FileInfo
+	fstats, err = os.Lstat(fname)
+	if err != nil {
+		return nil, err
+	}
+	if fstats.Mode()&os.ModeSymlink != 0 {
+		var target string
+		target, err = os.Readlink(fname)
+		return []byte(SHA256(target)), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch algorithm {
+	case "imohash":
+		return IMOHashFile(fname)
+	case "md5":
+		return MD5HashFile(fname)
+	case "xxhash":
+		return XXHashFile(fname)
+	}
+	err = fmt.Errorf("unspecified algorithm")
+	return
 }
 
 // MD5HashFile returns MD5 hash
@@ -68,6 +94,15 @@ func IMOHashFile(fname string) (hash []byte, err error) {
 	return
 }
 
+var imofull = imohash.NewCustom(0, 0)
+
+// IMOHashFileFull returns imohash of full file
+func IMOHashFileFull(fname string) (hash []byte, err error) {
+	b, err := imofull.SumFile(fname)
+	hash = b[:]
+	return
+}
+
 // XXHashFile returns the xxhash of a file
 func XXHashFile(fname string) (hash256 []byte, err error) {
 	f, err := os.Open(fname)
@@ -89,7 +124,7 @@ func XXHashFile(fname string) (hash256 []byte, err error) {
 func SHA256(s string) string {
 	sha := sha256.New()
 	sha.Write([]byte(s))
-	return fmt.Sprintf("%x", sha.Sum(nil))
+	return hex.EncodeToString(sha.Sum(nil))
 }
 
 // PublicIP returns public ip address
@@ -123,18 +158,32 @@ func LocalIP() string {
 	return localAddr.IP.String()
 }
 
+func GenerateRandomPin() string {
+	s := ""
+	max := new(big.Int)
+	max.SetInt64(9)
+	for i := 0; i < 4; i++ {
+		v, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			panic(err)
+		}
+		s += fmt.Sprintf("%d", v)
+	}
+	return s
+}
+
 // GetRandomName returns mnemoicoded random name
 func GetRandomName() string {
 	var result []string
 	bs := make([]byte, 4)
 	rand.Read(bs)
 	result = mnemonicode.EncodeWordList(result, bs)
-	return strings.Join(result, "-")
+	return GenerateRandomPin() + "-" + strings.Join(result, "-")
 }
 
 // ByteCountDecimal converts bytes to human readable byte string
 func ByteCountDecimal(b int64) string {
-	const unit = 1000
+	const unit = 1024
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
 	}
@@ -231,4 +280,71 @@ func GetLocalIPs() (ips []string, err error) {
 		}
 	}
 	return
+}
+
+func RandomFileName() (fname string, err error) {
+	f, err := ioutil.TempFile(".", "croc-stdin-")
+	if err != nil {
+		return
+	}
+	fname = f.Name()
+	_ = f.Close()
+	return
+}
+
+func FindOpenPorts(host string, portNumStart, numPorts int) (openPorts []int) {
+	openPorts = []int{}
+	for port := portNumStart; port-portNumStart < 200; port++ {
+		timeout := 100 * time.Millisecond
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, fmt.Sprint(port)), timeout)
+		if conn != nil {
+			conn.Close()
+		} else if err != nil {
+			openPorts = append(openPorts, port)
+		}
+		if len(openPorts) >= numPorts {
+			return
+		}
+	}
+	return
+}
+
+// local ip determination
+// https://stackoverflow.com/questions/41240761/check-if-ip-address-is-in-private-network-space
+var privateIPBlocks []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"127.0.0.0/8",    // IPv4 loopback
+		"10.0.0.0/8",     // RFC1918
+		"172.16.0.0/12",  // RFC1918
+		"192.168.0.0/16", // RFC1918
+		"169.254.0.0/16", // RFC3927 link-local
+		"::1/128",        // IPv6 loopback
+		"fe80::/10",      // IPv6 link-local
+		"fc00::/7",       // IPv6 unique local addr
+	} {
+		_, block, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Errorf("parse error on %q: %v", cidr, err))
+		}
+		privateIPBlocks = append(privateIPBlocks, block)
+	}
+}
+
+func IsLocalIP(ipaddress string) bool {
+	if strings.Contains(ipaddress, "localhost") {
+		return true
+	}
+	host, _, _ := net.SplitHostPort(ipaddress)
+	ip := net.ParseIP(host)
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	for _, block := range privateIPBlocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,11 +9,11 @@ import (
 	"time"
 
 	log "github.com/schollz/logger"
-	"github.com/schollz/pake/v2"
+	"github.com/schollz/pake/v3"
 
-	"github.com/schollz/croc/v8/src/comm"
-	"github.com/schollz/croc/v8/src/crypt"
-	"github.com/schollz/croc/v8/src/models"
+	"github.com/schollz/croc/v9/src/comm"
+	"github.com/schollz/croc/v9/src/crypt"
+	"github.com/schollz/croc/v9/src/models"
 )
 
 type server struct {
@@ -37,6 +37,7 @@ type roomMap struct {
 }
 
 var timeToRoomDeletion = 10 * time.Minute
+var pingRoom = "pinglkasjdlfjsaldjf"
 
 // Run starts a tcp listener, run async
 func Run(debugLevel, port, password string, banner ...string) (err error) {
@@ -100,8 +101,17 @@ func (s *server) run() (err error) {
 		go func(port string, connection net.Conn) {
 			c := comm.New(connection)
 			room, errCommunication := s.clientCommunication(port, c)
+			log.Debugf("room: %+v", room)
+			log.Debugf("err: %+v", errCommunication)
 			if errCommunication != nil {
 				log.Debugf("relay-%s: %s", connection.RemoteAddr().String(), errCommunication.Error())
+				connection.Close()
+				return
+			}
+			if room == pingRoom {
+				log.Debugf("got ping")
+				connection.Close()
+				return
 			}
 			for {
 				// check connection
@@ -142,7 +152,7 @@ var weakKey = []byte{1, 2, 3}
 
 func (s *server) clientCommunication(port string, c *comm.Comm) (room string, err error) {
 	// establish secure password with PAKE for communication with relay
-	B, err := pake.InitCurve(weakKey, 1, "siec", 1*time.Microsecond)
+	B, err := pake.InitCurve(weakKey, 1, "siec")
 	if err != nil {
 		return
 	}
@@ -150,16 +160,16 @@ func (s *server) clientCommunication(port string, c *comm.Comm) (room string, er
 	if err != nil {
 		return
 	}
+	if bytes.Equal(Abytes, []byte("ping")) {
+		room = pingRoom
+		c.Send([]byte("pong"))
+		return
+	}
 	err = B.Update(Abytes)
 	if err != nil {
 		return
 	}
 	err = c.Send(B.Bytes())
-	Abytes, err = c.Receive()
-	if err != nil {
-		return
-	}
-	err = B.Update(Abytes)
 	if err != nil {
 		return
 	}
@@ -171,6 +181,9 @@ func (s *server) clientCommunication(port string, c *comm.Comm) (room string, er
 
 	// receive salt
 	salt, err := c.Receive()
+	if err != nil {
+		return
+	}
 	strongKeyForEncryption, _, err := crypt.New(strongKey, salt)
 	if err != nil {
 		return
@@ -253,7 +266,6 @@ func (s *server) clientCommunication(port string, c *comm.Comm) (room string, er
 		err = c.Send(bSend)
 		if err != nil {
 			log.Error(err)
-			s.deleteRoom(room)
 			return
 		}
 		return
@@ -372,6 +384,25 @@ func pipe(conn1 net.Conn, conn2 net.Conn) {
 	}
 }
 
+func PingServer(address string) (err error) {
+	c, err := comm.NewConnection(address, 200*time.Millisecond)
+	if err != nil {
+		return
+	}
+	err = c.Send([]byte("ping"))
+	if err != nil {
+		return
+	}
+	b, err := c.Receive()
+	if err != nil {
+		return
+	}
+	if bytes.Equal(b, []byte("pong")) {
+		return nil
+	}
+	return fmt.Errorf("no pong")
+}
+
 // ConnectToTCPServer will initiate a new connection
 // to the specified address, room with optional time limit
 func ConnectToTCPServer(address, password, room string, timelimit ...time.Duration) (c *comm.Comm, banner string, ipaddr string, err error) {
@@ -385,7 +416,7 @@ func ConnectToTCPServer(address, password, room string, timelimit ...time.Durati
 	}
 
 	// get PAKE connection with server to establish strong key to transfer info
-	A, err := pake.InitCurve(weakKey, 0, "siec", 1*time.Microsecond)
+	A, err := pake.InitCurve(weakKey, 0, "siec")
 	if err != nil {
 		return
 	}
@@ -401,10 +432,6 @@ func ConnectToTCPServer(address, password, room string, timelimit ...time.Durati
 	if err != nil {
 		return
 	}
-	err = c.Send(A.Bytes())
-	if err != nil {
-		return
-	}
 	strongKey, err := A.SessionKey()
 	if err != nil {
 		return
@@ -412,6 +439,9 @@ func ConnectToTCPServer(address, password, room string, timelimit ...time.Durati
 	log.Debugf("strong key: %x", strongKey)
 
 	strongKeyForEncryption, salt, err := crypt.New(strongKey, nil)
+	if err != nil {
+		return
+	}
 	// send salt
 	err = c.Send(salt)
 	if err != nil {

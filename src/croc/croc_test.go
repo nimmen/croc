@@ -7,16 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schollz/croc/v8/src/tcp"
+	"github.com/schollz/croc/v9/src/tcp"
 	log "github.com/schollz/logger"
 	"github.com/stretchr/testify/assert"
 )
-
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
 
 func init() {
 	log.SetLevel("trace")
@@ -35,7 +29,7 @@ func TestCrocReadme(t *testing.T) {
 	log.Debug("setting up sender")
 	sender, err := New(Options{
 		IsSender:      true,
-		SharedSecret:  "test",
+		SharedSecret:  "8123-testingthecroc",
 		Debug:         true,
 		RelayAddress:  "localhost:8081",
 		RelayPorts:    []string{"8081"},
@@ -43,6 +37,8 @@ func TestCrocReadme(t *testing.T) {
 		Stdout:        false,
 		NoPrompt:      true,
 		DisableLocal:  true,
+		Curve:         "siec",
+		Overwrite:     true,
 	})
 	if err != nil {
 		panic(err)
@@ -51,13 +47,15 @@ func TestCrocReadme(t *testing.T) {
 	log.Debug("setting up receiver")
 	receiver, err := New(Options{
 		IsSender:      false,
-		SharedSecret:  "test",
+		SharedSecret:  "8123-testingthecroc",
 		Debug:         true,
 		RelayAddress:  "localhost:8081",
 		RelayPassword: "pass123",
 		Stdout:        false,
 		NoPrompt:      true,
 		DisableLocal:  true,
+		Curve:         "siec",
+		Overwrite:     true,
 	})
 	if err != nil {
 		panic(err)
@@ -95,7 +93,7 @@ func TestCrocLocal(t *testing.T) {
 	log.Debug("setting up sender")
 	sender, err := New(Options{
 		IsSender:      true,
-		SharedSecret:  "test",
+		SharedSecret:  "8123-testingthecroc",
 		Debug:         true,
 		RelayAddress:  "localhost:8181",
 		RelayPorts:    []string{"8181", "8182"},
@@ -103,6 +101,8 @@ func TestCrocLocal(t *testing.T) {
 		Stdout:        true,
 		NoPrompt:      true,
 		DisableLocal:  false,
+		Curve:         "siec",
+		Overwrite:     true,
 	})
 	if err != nil {
 		panic(err)
@@ -112,13 +112,15 @@ func TestCrocLocal(t *testing.T) {
 	log.Debug("setting up receiver")
 	receiver, err := New(Options{
 		IsSender:      false,
-		SharedSecret:  "test",
+		SharedSecret:  "8123-testingthecroc",
 		Debug:         true,
 		RelayAddress:  "localhost:8181",
 		RelayPassword: "pass123",
 		Stdout:        true,
 		NoPrompt:      true,
 		DisableLocal:  false,
+		Curve:         "siec",
+		Overwrite:     true,
 	})
 	if err != nil {
 		panic(err)
@@ -169,7 +171,7 @@ func TestCrocError(t *testing.T) {
 	log.SetLevel("warn")
 	sender, _ := New(Options{
 		IsSender:      true,
-		SharedSecret:  "test33",
+		SharedSecret:  "8123-testingthecroc2",
 		Debug:         true,
 		RelayAddress:  "doesntexistok.com:8381",
 		RelayPorts:    []string{"8381", "8382"},
@@ -177,6 +179,8 @@ func TestCrocError(t *testing.T) {
 		Stdout:        true,
 		NoPrompt:      true,
 		DisableLocal:  true,
+		Curve:         "siec",
+		Overwrite:     true,
 	})
 	err = sender.Send(TransferOptions{
 		PathToFiles:      []string{tmpfile.Name()},

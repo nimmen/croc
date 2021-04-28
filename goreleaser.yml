@@ -21,10 +21,10 @@ build:
   ignore:
     - goos: darwin
       goarch: 386
+    - goos: freebsd
+      goarch: arm
   goarm:
     - 7
-  hooks:
-    post: sh ./src/install/prepare-sources-tarball.sh
 nfpms:
   -
     formats:
@@ -69,10 +69,12 @@ archives:
     files:
       - README.md
       - LICENSE
+      - zsh_autocomplete
+      - bash_autocomplete
 
 brews:
   -
-    github:
+    tap:
       owner: schollz
       name: homebrew-tap
     folder: Formula

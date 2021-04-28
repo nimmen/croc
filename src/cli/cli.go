@@ -13,18 +13,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schollz/croc/v8/src/croc"
-	"github.com/schollz/croc/v8/src/models"
-	"github.com/schollz/croc/v8/src/tcp"
-	"github.com/schollz/croc/v8/src/utils"
+	"github.com/schollz/cli/v2"
+	"github.com/schollz/croc/v9/src/comm"
+	"github.com/schollz/croc/v9/src/croc"
+	"github.com/schollz/croc/v9/src/models"
+	"github.com/schollz/croc/v9/src/tcp"
+	"github.com/schollz/croc/v9/src/utils"
 	log "github.com/schollz/logger"
-	"github.com/urfave/cli"
+	"github.com/schollz/pake/v3"
 )
 
 // Version specifies the version
 var Version string
 
-// Run will run the command line proram
+// Run will run the command line program
 func Run() (err error) {
 	// use all of the processors
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -32,7 +34,7 @@ func Run() (err error) {
 	app := cli.NewApp()
 	app.Name = "croc"
 	if Version == "" {
-		Version = "v8.2.0-ba2c46c"
+		Version = "v9.1.0-35106d4"
 	}
 	app.Version = Version
 	app.Compiled = time.Now()
@@ -41,19 +43,22 @@ func Run() (err error) {
       croc send file.txt
 
    Send a file with a custom code:
-      croc send --code secret-passphrase file.txt`
-	app.Commands = []cli.Command{
+      croc send --code secret-code file.txt
+
+   Receive a file using code:
+      croc secret-code`
+	app.Commands = []*cli.Command{
 		{
 			Name:        "send",
 			Usage:       "send a file (see options with croc send -h)",
 			Description: "send a file over the relay",
 			ArgsUsage:   "[filename]",
 			Flags: []cli.Flag{
-				cli.StringFlag{Name: "code, c", Usage: "codephrase used to connect to relay"},
-				cli.StringFlag{Name: "text, t", Usage: "send some text"},
-				cli.BoolFlag{Name: "no-local", Usage: "disable local relay when sending"},
-				cli.BoolFlag{Name: "no-multi", Usage: "disable multiplexing"},
-				cli.StringFlag{Name: "ports", Value: "9009,9010,9011,9012,9013", Usage: "ports of the local relay (optional)"},
+				&cli.StringFlag{Name: "code", Aliases: []string{"c"}, Usage: "codephrase used to connect to relay"},
+				&cli.StringFlag{Name: "text", Aliases: []string{"t"}, Usage: "send some text"},
+				&cli.BoolFlag{Name: "no-local", Usage: "disable local relay when sending"},
+				&cli.BoolFlag{Name: "no-multi", Usage: "disable multiplexing"},
+				&cli.StringFlag{Name: "ports", Value: "9009,9010,9011,9012,9013", Usage: "ports of the local relay (optional)"},
 			},
 			HelpName: "croc send",
 			Action: func(c *cli.Context) error {
@@ -69,32 +74,49 @@ func Run() (err error) {
 				return relay(c)
 			},
 			Flags: []cli.Flag{
-				cli.StringFlag{Name: "ports", Value: "9009,9010,9011,9012,9013", Usage: "ports of the relay"},
+				&cli.StringFlag{Name: "ports", Value: "9009,9010,9011,9012,9013", Usage: "ports of the relay"},
 			},
 		},
 	}
 	app.Flags = []cli.Flag{
-		cli.BoolFlag{Name: "remember", Usage: "save these settings to reuse next time"},
-		cli.BoolFlag{Name: "debug", Usage: "toggle debug mode"},
-		cli.BoolFlag{Name: "yes", Usage: "automatically agree to all prompts"},
-		cli.BoolFlag{Name: "stdout", Usage: "redirect file to stdout"},
-		cli.BoolFlag{Name: "ask", Usage: "make sure sender and recipient are prompted"},
-		cli.StringFlag{Name: "relay", Value: models.DEFAULT_RELAY, Usage: "address of the relay"},
-		cli.StringFlag{Name: "relay6", Value: models.DEFAULT_RELAY6, Usage: "ipv6 address of the relay"},
-		cli.StringFlag{Name: "out", Value: ".", Usage: "specify an output folder to receive the file"},
-		cli.StringFlag{Name: "pass", Value: "pass123", Usage: "password for the relay"},
+		&cli.BoolFlag{Name: "remember", Usage: "save these settings to reuse next time"},
+		&cli.BoolFlag{Name: "debug", Usage: "toggle debug mode"},
+		&cli.BoolFlag{Name: "yes", Usage: "automatically agree to all prompts"},
+		&cli.BoolFlag{Name: "stdout", Usage: "redirect file to stdout"},
+		&cli.BoolFlag{Name: "no-compress", Usage: "disable compression"},
+		&cli.BoolFlag{Name: "ask", Usage: "make sure sender and recipient are prompted"},
+		&cli.BoolFlag{Name: "local", Usage: "force to use only local connections"},
+		&cli.BoolFlag{Name: "ignore-stdin", Usage: "ignore piped stdin"},
+		&cli.BoolFlag{Name: "overwrite", Usage: "do not prompt to overwrite"},
+		&cli.StringFlag{Name: "curve", Value: "siec", Usage: "choose an encryption curve (" + strings.Join(pake.AvailableCurves(), ", ") + ")"},
+		&cli.StringFlag{Name: "ip", Value: "", Usage: "set sender ip if known e.g. 10.0.0.1:9009, [::1]:9009"},
+		&cli.StringFlag{Name: "relay", Value: models.DEFAULT_RELAY, Usage: "address of the relay", EnvVars: []string{"CROC_RELAY"}},
+		&cli.StringFlag{Name: "relay6", Value: models.DEFAULT_RELAY6, Usage: "ipv6 address of the relay", EnvVars: []string{"CROC_RELAY6"}},
+		&cli.StringFlag{Name: "out", Value: ".", Usage: "specify an output folder to receive the file"},
+		&cli.StringFlag{Name: "pass", Value: models.DEFAULT_PASSPHRASE, Usage: "password for the relay", EnvVars: []string{"CROC_PASS"}},
+		&cli.StringFlag{Name: "socks5", Value: "", Usage: "add a socks5 proxy", EnvVars: []string{"SOCKS5_PROXY"}},
 	}
 	app.EnableBashCompletion = true
 	app.HideHelp = false
 	app.HideVersion = false
-	app.BashComplete = func(c *cli.Context) {
-		fmt.Fprintf(c.App.Writer, "send\nreceive\relay")
-	}
 	app.Action = func(c *cli.Context) error {
+		allStringsAreFiles := func(strs []string) bool {
+			for _, str := range strs {
+				if !utils.Exists(str) {
+					return false
+				}
+			}
+			return true
+		}
+
 		// if trying to send but forgot send, let the user know
-		if c.Args().First() != "" && utils.Exists(c.Args().First()) {
-			_, fname := filepath.Split(c.Args().First())
-			yn := utils.GetInput(fmt.Sprintf("Did you mean to send '%s'? (y/n) ", fname))
+		if c.Args().Present() && allStringsAreFiles(c.Args().Slice()) {
+			fnames := []string{}
+			for _, fpath := range c.Args().Slice() {
+				_, basename := filepath.Split(fpath)
+				fnames = append(fnames, "'"+basename+"'")
+			}
+			yn := utils.GetInput(fmt.Sprintf("Did you mean to send %s? (y/n) ", strings.Join(fnames, ", ")))
 			if strings.ToLower(yn) == "y" {
 				return send(c)
 			}
@@ -111,7 +133,15 @@ func getConfigDir() (homedir string, err error) {
 		log.Error(err)
 		return
 	}
-	homedir = path.Join(homedir, ".config", "croc")
+
+	if envHomedir, isSet := os.LookupEnv("CROC_CONFIG_DIR"); isSet {
+		homedir = envHomedir
+	} else if xdgConfigHome, isSet := os.LookupEnv("XDG_CONFIG_HOME"); isSet {
+		homedir = path.Join(xdgConfigHome, "croc")
+	} else {
+		homedir = path.Join(homedir, ".config", "croc")
+	}
+
 	if _, err = os.Stat(homedir); os.IsNotExist(err) {
 		log.Debugf("creating home directory %s", homedir)
 		err = os.MkdirAll(homedir, 0700)
@@ -120,7 +150,7 @@ func getConfigDir() (homedir string, err error) {
 }
 
 func setDebugLevel(c *cli.Context) {
-	if c.GlobalBool("debug") {
+	if c.Bool("debug") {
 		log.SetLevel("debug")
 		log.Debug("debug mode on")
 	} else {
@@ -137,22 +167,38 @@ func getConfigFile() string {
 	return path.Join(configFile, "send.json")
 }
 
+func determinePass(c *cli.Context) (pass string) {
+	pass = c.String("pass")
+	b, err := ioutil.ReadFile(pass)
+	if err == nil {
+		pass = strings.TrimSpace(string(b))
+	}
+	return
+}
+
 func send(c *cli.Context) (err error) {
 	setDebugLevel(c)
+	comm.Socks5Proxy = c.String("socks5")
 	crocOptions := croc.Options{
 		SharedSecret:   c.String("code"),
 		IsSender:       true,
-		Debug:          c.GlobalBool("debug"),
-		NoPrompt:       c.GlobalBool("yes"),
-		RelayAddress:   c.GlobalString("relay"),
-		RelayAddress6:  c.GlobalString("relay6"),
-		Stdout:         c.GlobalBool("stdout"),
+		Debug:          c.Bool("debug"),
+		NoPrompt:       c.Bool("yes"),
+		RelayAddress:   c.String("relay"),
+		RelayAddress6:  c.String("relay6"),
+		Stdout:         c.Bool("stdout"),
 		DisableLocal:   c.Bool("no-local"),
+		OnlyLocal:      c.Bool("local"),
+		IgnoreStdin:    c.Bool("ignore-stdin"),
 		RelayPorts:     strings.Split(c.String("ports"), ","),
-		Ask:            c.GlobalBool("ask"),
+		Ask:            c.Bool("ask"),
 		NoMultiplexing: c.Bool("no-multi"),
-		RelayPassword:  c.GlobalString("pass"),
+		RelayPassword:  determinePass(c),
 		SendingText:    c.String("text") != "",
+		NoCompress:     c.Bool("no-compress"),
+		Overwrite:      c.Bool("overwrite"),
+		Curve:          c.String("curve"),
+		HashAlgorithm:  "xxhash",
 	}
 	if crocOptions.RelayAddress != models.DEFAULT_RELAY {
 		crocOptions.RelayAddress6 = ""
@@ -160,7 +206,7 @@ func send(c *cli.Context) (err error) {
 		crocOptions.RelayAddress = ""
 	}
 	b, errOpen := ioutil.ReadFile(getConfigFile())
-	if errOpen == nil && !c.GlobalBool("remember") {
+	if errOpen == nil && !c.Bool("remember") {
 		var rememberedOptions croc.Options
 		err = json.Unmarshal(b, &rememberedOptions)
 		if err != nil {
@@ -168,7 +214,7 @@ func send(c *cli.Context) (err error) {
 			return
 		}
 		// update anything that isn't explicitly set
-		if !c.GlobalIsSet("relay") {
+		if !c.IsSet("relay") {
 			crocOptions.RelayAddress = rememberedOptions.RelayAddress
 		}
 		if !c.IsSet("no-local") {
@@ -180,22 +226,22 @@ func send(c *cli.Context) (err error) {
 		if !c.IsSet("code") {
 			crocOptions.SharedSecret = rememberedOptions.SharedSecret
 		}
-		if !c.GlobalIsSet("pass") {
+		if !c.IsSet("pass") {
 			crocOptions.RelayPassword = rememberedOptions.RelayPassword
 		}
 	}
 
 	var fnames []string
 	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
+	if ((stat.Mode() & os.ModeCharDevice) == 0) && !c.Bool("ignore-stdin") {
 		fnames, err = getStdin()
 		if err != nil {
 			return
 		}
 		defer func() {
-			err = os.Remove(fnames[0])
-			if err != nil {
-				log.Error(err)
+			e := os.Remove(fnames[0])
+			if e != nil {
+				log.Error(e)
 			}
 		}()
 	} else if c.String("text") != "" {
@@ -204,14 +250,14 @@ func send(c *cli.Context) (err error) {
 			return
 		}
 		defer func() {
-			err = os.Remove(fnames[0])
-			if err != nil {
-				log.Error(err)
+			e := os.Remove(fnames[0])
+			if e != nil {
+				log.Error(e)
 			}
 		}()
 
 	} else {
-		fnames = append([]string{c.Args().First()}, c.Args().Tail()...)
+		fnames = c.Args().Slice()
 	}
 	if len(fnames) == 0 {
 		return errors.New("must specify file: croc send [filename]")
@@ -284,7 +330,7 @@ func getPaths(fnames []string) (paths []string, haveFolder bool, err error) {
 	haveFolder = false
 	paths = []string{}
 	for _, fname := range fnames {
-		stat, errStat := os.Stat(fname)
+		stat, errStat := os.Lstat(fname)
 		if errStat != nil {
 			err = errStat
 			return
@@ -312,7 +358,7 @@ func getPaths(fnames []string) (paths []string, haveFolder bool, err error) {
 }
 
 func saveConfig(c *cli.Context, crocOptions croc.Options) {
-	if c.GlobalBool("remember") {
+	if c.Bool("remember") {
 		configFile := getConfigFile()
 		log.Debug("saving config file")
 		var bConfig []byte
@@ -335,16 +381,22 @@ func saveConfig(c *cli.Context, crocOptions croc.Options) {
 }
 
 func receive(c *cli.Context) (err error) {
+	comm.Socks5Proxy = c.String("socks5")
 	crocOptions := croc.Options{
 		SharedSecret:  c.String("code"),
 		IsSender:      false,
-		Debug:         c.GlobalBool("debug"),
-		NoPrompt:      c.GlobalBool("yes"),
-		RelayAddress:  c.GlobalString("relay"),
-		RelayAddress6: c.GlobalString("relay6"),
-		Stdout:        c.GlobalBool("stdout"),
-		Ask:           c.GlobalBool("ask"),
-		RelayPassword: c.GlobalString("pass"),
+		Debug:         c.Bool("debug"),
+		NoPrompt:      c.Bool("yes"),
+		RelayAddress:  c.String("relay"),
+		RelayAddress6: c.String("relay6"),
+		Stdout:        c.Bool("stdout"),
+		Ask:           c.Bool("ask"),
+		RelayPassword: determinePass(c),
+		OnlyLocal:     c.Bool("local"),
+		IP:            c.String("ip"),
+		Overwrite:     c.Bool("overwrite"),
+		Curve:         c.String("curve"),
+		HashAlgorithm: "xxhash",
 	}
 	if crocOptions.RelayAddress != models.DEFAULT_RELAY {
 		crocOptions.RelayAddress6 = ""
@@ -352,7 +404,7 @@ func receive(c *cli.Context) (err error) {
 		crocOptions.RelayAddress = ""
 	}
 
-	switch len(c.Args()) {
+	switch c.Args().Len() {
 	case 1:
 		crocOptions.SharedSecret = c.Args().First()
 	case 3:
@@ -371,24 +423,24 @@ func receive(c *cli.Context) (err error) {
 	}
 	configFile = path.Join(configFile, "receive.json")
 	b, errOpen := ioutil.ReadFile(configFile)
-	if errOpen == nil && !c.GlobalBool("remember") {
+	if errOpen == nil && !c.Bool("remember") {
 		var rememberedOptions croc.Options
 		err = json.Unmarshal(b, &rememberedOptions)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		// update anything that isn't explicitly set
-		if !c.GlobalIsSet("relay") {
+		// update anything that isn't expliciGlobalIsSettly set
+		if !c.IsSet("relay") {
 			crocOptions.RelayAddress = rememberedOptions.RelayAddress
 		}
-		if !c.GlobalIsSet("yes") {
+		if !c.IsSet("yes") {
 			crocOptions.NoPrompt = rememberedOptions.NoPrompt
 		}
 		if crocOptions.SharedSecret == "" {
 			crocOptions.SharedSecret = rememberedOptions.SharedSecret
 		}
-		if !c.GlobalIsSet("pass") {
+		if !c.IsSet("pass") {
 			crocOptions.RelayPassword = rememberedOptions.RelayPassword
 		}
 	}
@@ -396,8 +448,8 @@ func receive(c *cli.Context) (err error) {
 	if crocOptions.SharedSecret == "" {
 		crocOptions.SharedSecret = utils.GetInput("Enter receive code: ")
 	}
-	if c.GlobalString("out") != "" {
-		if err = os.Chdir(c.GlobalString("out")); err != nil {
+	if c.String("out") != "" {
+		if err = os.Chdir(c.String("out")); err != nil {
 			return err
 		}
 	}
@@ -408,7 +460,7 @@ func receive(c *cli.Context) (err error) {
 	}
 
 	// save the config
-	if c.GlobalBool("remember") {
+	if c.Bool("remember") {
 		log.Debug("saving config file")
 		var bConfig []byte
 		bConfig, err = json.MarshalIndent(crocOptions, "", "    ")
@@ -431,7 +483,7 @@ func receive(c *cli.Context) (err error) {
 func relay(c *cli.Context) (err error) {
 	log.Infof("starting croc relay version %v", Version)
 	debugString := "info"
-	if c.GlobalBool("debug") {
+	if c.Bool("debug") {
 		debugString = "debug"
 	}
 	ports := strings.Split(c.String("ports"), ",")
@@ -441,11 +493,11 @@ func relay(c *cli.Context) (err error) {
 			continue
 		}
 		go func(portStr string) {
-			err = tcp.Run(debugString, portStr, c.GlobalString("pass"))
+			err = tcp.Run(debugString, portStr, determinePass(c))
 			if err != nil {
 				panic(err)
 			}
 		}(port)
 	}
-	return tcp.Run(debugString, ports[0], c.GlobalString("pass"), tcpPorts)
+	return tcp.Run(debugString, ports[0], determinePass(c), tcpPorts)
 }

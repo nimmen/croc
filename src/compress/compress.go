@@ -32,9 +32,13 @@ func Decompress(src []byte) []byte {
 
 // compress uses flate to compress a byte slice to a corresponding level
 func compress(src []byte, dest io.Writer, level int) {
-	compressor, _ := flate.NewWriter(dest, level)
+	compressor, err := flate.NewWriter(dest, level)
+	if err != nil {
+		log.Debugf("error level data: %v", err)
+		return
+	}
 	if _, err := compressor.Write(src); err != nil {
-		log.Errorf("error writing data: %v", err)
+		log.Debugf("error writing data: %v", err)
 	}
 	compressor.Close()
 }
@@ -43,7 +47,7 @@ func compress(src []byte, dest io.Writer, level int) {
 func decompress(src io.Reader, dest io.Writer) {
 	decompressor := flate.NewReader(src)
 	if _, err := io.Copy(dest, decompressor); err != nil {
-		log.Errorf("error copying data: %v", err)
+		log.Debugf("error copying data: %v", err)
 	}
 	decompressor.Close()
 }

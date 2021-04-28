@@ -10,11 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schollz/croc/v9/src/models"
 	"github.com/stretchr/testify/assert"
 )
 
+var bigFileSize = 75000000
+
 func bigFile() {
-	ioutil.WriteFile("bigfile.test", bytes.Repeat([]byte("z"), 75000000), 0666)
+	ioutil.WriteFile("bigfile.test", bytes.Repeat([]byte("z"), bigFileSize), 0666)
 }
 
 func BenchmarkMD5(b *testing.B) {
@@ -32,11 +35,35 @@ func BenchmarkXXHash(b *testing.B) {
 		XXHashFile("bigfile.test")
 	}
 }
+
 func BenchmarkImoHash(b *testing.B) {
 	bigFile()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		IMOHashFile("bigfile.test")
+	}
+}
+
+func BenchmarkImoHashFull(b *testing.B) {
+	bigFile()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		IMOHashFileFull("bigfile.test")
+	}
+}
+
+func BenchmarkSha256(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		SHA256("hello,world")
+	}
+}
+
+func BenchmarkMissingChunks(b *testing.B) {
+	bigFile()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		MissingChunks("bigfile.test", int64(bigFileSize), models.TCP_BUFFER_SIZE/2)
 	}
 }
 
@@ -81,9 +108,9 @@ func TestSHA256(t *testing.T) {
 }
 
 func TestByteCountDecimal(t *testing.T) {
-	assert.Equal(t, "10.0 kB", ByteCountDecimal(10000))
+	assert.Equal(t, "10.0 kB", ByteCountDecimal(10240))
 	assert.Equal(t, "50 B", ByteCountDecimal(50))
-	assert.Equal(t, "12.4 MB", ByteCountDecimal(12378517))
+	assert.Equal(t, "12.4 MB", ByteCountDecimal(13002343))
 }
 
 func TestMissingChunks(t *testing.T) {
@@ -157,9 +184,9 @@ func TestHashFile(t *testing.T) {
 	if err := tmpfile.Close(); err != nil {
 		panic(err)
 	}
-	hashed, err := HashFile(tmpfile.Name())
+	hashed, err := HashFile(tmpfile.Name(), "xxhash")
 	assert.Nil(t, err)
-	assert.Equal(t, "18c9673a4bb8325d323e7f24fda9ae1e", fmt.Sprintf("%x", hashed))
+	assert.Equal(t, "e66c561610ad51e2", fmt.Sprintf("%x", hashed))
 }
 
 func TestPublicIP(t *testing.T) {
@@ -177,5 +204,15 @@ func TestLocalIP(t *testing.T) {
 
 func TestGetRandomName(t *testing.T) {
 	name := GetRandomName()
+	fmt.Println(name)
 	assert.NotEmpty(t, name)
+}
+
+func TestFindOpenPorts(t *testing.T) {
+	openPorts := FindOpenPorts("localhost", 9009, 4)
+	assert.Equal(t, []int{9009, 9010, 9011, 9012}, openPorts)
+}
+
+func TestIsLocalIP(t *testing.T) {
+	assert.True(t, IsLocalIP("192.168.0.14:9009"))
 }

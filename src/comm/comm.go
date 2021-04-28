@@ -4,13 +4,20 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/schollz/croc/v9/src/utils"
 	log "github.com/schollz/logger"
+	"golang.org/x/net/proxy"
 )
 
-const MAXBYTES = 4000000
+var Socks5Proxy = ""
+
+var MAGIC_BYTES = []byte("croc")
 
 // Comm is some basic TCP communication
 type Comm struct {
@@ -23,7 +30,27 @@ func NewConnection(address string, timelimit ...time.Duration) (c *Comm, err err
 	if len(timelimit) > 0 {
 		tlimit = timelimit[0]
 	}
-	connection, err := net.DialTimeout("tcp", address, tlimit)
+	var connection net.Conn
+	if Socks5Proxy != "" && !utils.IsLocalIP(address) {
+		var dialer proxy.Dialer
+		// prepend schema if no schema is given
+		if !strings.Contains(Socks5Proxy, `://`) {
+			Socks5Proxy = `socks5://` + Socks5Proxy
+		}
+		socks5ProxyURL, urlParseError := url.Parse(Socks5Proxy)
+		if urlParseError != nil {
+			err = fmt.Errorf("Unable to parse socks proxy url: %s", urlParseError)
+			return
+		}
+		dialer, err = proxy.FromURL(socks5ProxyURL, proxy.Direct)
+		if err != nil {
+			err = fmt.Errorf("proxy failed: %w", err)
+			return
+		}
+		connection, err = dialer.Dial("tcp", address)
+	} else {
+		connection, err = net.DialTimeout("tcp", address, tlimit)
+	}
 	if err != nil {
 		err = fmt.Errorf("comm.NewConnection failed: %w", err)
 		return
@@ -61,23 +88,24 @@ func (c *Comm) Close() {
 	}
 }
 
-func (c *Comm) Write(b []byte) (int, error) {
+func (c *Comm) Write(b []byte) (n int, err error) {
 	header := new(bytes.Buffer)
-	err := binary.Write(header, binary.LittleEndian, uint32(len(b)))
+	err = binary.Write(header, binary.LittleEndian, uint32(len(b)))
 	if err != nil {
 		fmt.Println("binary.Write failed:", err)
 	}
 	tmpCopy := append(header.Bytes(), b...)
-	n, err := c.connection.Write(tmpCopy)
-	if n != len(tmpCopy) {
-		if err != nil {
-			err = fmt.Errorf("wanted to write %d but wrote %d: %w", len(b), n, err)
-		} else {
-			err = fmt.Errorf("wanted to write %d but wrote %d", len(b), n)
-		}
+	tmpCopy = append(MAGIC_BYTES, tmpCopy...)
+	n, err = c.connection.Write(tmpCopy)
+	if err != nil {
+		err = fmt.Errorf("connection.Write failed: %w", err)
+		return
 	}
-	// log.Printf("wanted to write %d but wrote %d", n, len(b))
-	return n, err
+	if n != len(tmpCopy) {
+		err = fmt.Errorf("wanted to write %d but wrote %d", len(b), n)
+		return
+	}
+	return
 }
 
 func (c *Comm) Read() (buf []byte, numBytes int, bs []byte, err error) {
@@ -85,22 +113,27 @@ func (c *Comm) Read() (buf []byte, numBytes int, bs []byte, err error) {
 	if err := c.connection.SetReadDeadline(time.Now().Add(3 * time.Hour)); err != nil {
 		log.Warnf("error setting read deadline: %v", err)
 	}
+	// must clear the timeout setting
+	defer c.connection.SetDeadline(time.Time{})
+
+	// read until we get 4 bytes for the magic
+	header := make([]byte, 4)
+	_, err = io.ReadFull(c.connection, header)
+	if err != nil {
+		log.Debugf("initial read error: %v", err)
+		return
+	}
+	if !bytes.Equal(header, MAGIC_BYTES) {
+		err = fmt.Errorf("initial bytes are not magic: %x", header)
+		return
+	}
 
 	// read until we get 4 bytes for the header
-	var header []byte
-	numBytes = 4
-	for {
-		tmp := make([]byte, numBytes-len(header))
-		n, errRead := c.connection.Read(tmp)
-		if errRead != nil {
-			err = errRead
-			log.Debugf("initial read error: %v", err)
-			return
-		}
-		header = append(header, tmp[:n]...)
-		if numBytes == len(header) {
-			break
-		}
+	header = make([]byte, 4)
+	_, err = io.ReadFull(c.connection, header)
+	if err != nil {
+		log.Debugf("initial read error: %v", err)
+		return
 	}
 
 	var numBytesUint32 uint32
@@ -112,30 +145,16 @@ func (c *Comm) Read() (buf []byte, numBytes int, bs []byte, err error) {
 		return
 	}
 	numBytes = int(numBytesUint32)
-	if numBytes > MAXBYTES {
-		err = fmt.Errorf("too many bytes: %d", numBytes)
-		log.Debug(err)
-		return
-	}
-	buf = make([]byte, 0)
 
 	// shorten the reading deadline in case getting weird data
 	if err := c.connection.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		log.Warnf("error setting read deadline: %v", err)
 	}
-	for {
-		// log.Debugf("bytes: %d/%d", len(buf), numBytes)
-		tmp := make([]byte, numBytes-len(buf))
-		n, errRead := c.connection.Read(tmp)
-		if errRead != nil {
-			err = errRead
-			log.Debugf("consecutive read error: %v", err)
-			return
-		}
-		buf = append(buf, tmp[:n]...)
-		if numBytes == len(buf) {
-			break
-		}
+	buf = make([]byte, numBytes)
+	_, err = io.ReadFull(c.connection, buf)
+	if err != nil {
+		log.Debugf("consecutive read error: %v", err)
+		return
 	}
 	return
 }
